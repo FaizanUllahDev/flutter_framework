@@ -32,10 +32,8 @@ import io.flutter.embedding.engine.systemchannels.DeferredComponentChannel;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.Queue;
 
 /**
  * Flutter default implementation of DeferredComponentManager that downloads deferred component from
@@ -418,67 +416,25 @@ public class PlayStoreDeferredComponentManager implements DeferredComponentManag
     String abi = Build.SUPPORTED_ABIS[0];
     String pathAbi = abi.replace("-", "_"); // abis are represented with underscores in paths.
 
-    // TODO(garyq): Optimize this apk/file discovery process to use less i/o and be more
-    // performant and robust.
-
-    // Search directly in APKs first
-    List<String> apkPaths = new ArrayList<>();
-    // If not found in APKs, we check in extracted native libs for the lib directly.
-    List<String> soPaths = new ArrayList<>();
-
-    Queue<File> searchFiles = new LinkedList<>();
-    // Downloaded modules are stored here
-    searchFiles.add(context.getFilesDir());
-    // The initial installed apks are provided by `sourceDirs` in ApplicationInfo.
-    // The jniLibs we want are in the splits not the baseDir. These
-    // APKs are only searched as a fallback, as base libs generally do not need
-    // to be fully path referenced.
-    for (String path : context.getApplicationInfo().splitSourceDirs) {
-      searchFiles.add(new File(path));
-    }
-
-    while (!searchFiles.isEmpty()) {
-      File file = searchFiles.remove();
-      if (file != null && file.isDirectory() && file.listFiles() != null) {
-        for (File f : file.listFiles()) {
-          searchFiles.add(f);
-        }
-        continue;
-      }
-      String name = file.getName();
-      // Special case for "split_config" since android base module non-master apks are
-      // initially installed with the "split_config" prefix/name.
-      if (name.endsWith(".apk")
-          && (name.startsWith(componentName) || name.startsWith("split_config"))
-          && name.contains(pathAbi)) {
-        apkPaths.add(file.getAbsolutePath());
-        continue;
-      }
-      if (name.equals(aotSharedLibraryName)) {
-        soPaths.add(file.getAbsolutePath());
-      }
-    }
-
-    // These paths are handed to the native loader in descending priority order: it tries them
-    // first to last and stops at the first that loads (see FlutterJNI.loadDartDeferredLibrary).
-    // Ordering matters for security -- OS-installed signed APKs must be preferred over standalone,
-    // unbundled .so files in the app-writable internal storage dir (getFilesDir()), which are only
-    // a fallback and could be tampered with if anything else manages to write into internal
-    // storage.
+    // Only load deferred libraries from trusted paths: a bare filename resolved by the
+    // platform linker, or a signed split APK installed by the Android package manager.
+    // Never search app-writable storage for native code. A standalone .so there can be
+    // modified without going through APK signature verification.
     List<String> searchPaths = new ArrayList<>();
-
-    // Add the bare filename as the first search path. On some devices the .so file can be
-    // dlopen-ed with just the file name (resolved via the linker's own trusted search path).
     searchPaths.add(aotSharedLibraryName);
 
-    // Signed split APKs installed by the OS. Preferred over anything in app-writable storage.
-    for (String path : apkPaths) {
-      searchPaths.add(path + "!lib/" + abi + "/" + aotSharedLibraryName);
+    String[] splitSourceDirs = context.getApplicationInfo().splitSourceDirs;
+    if (splitSourceDirs != null) {
+      for (String path : splitSourceDirs) {
+        String name = new File(path).getName();
+        // ABI-specific split APKs can contain Dart deferred loading units.
+        if (name.endsWith(".apk")
+            && (name.startsWith(componentName) || name.startsWith("split_config"))
+            && name.contains(pathAbi)) {
+          searchPaths.add(path + "!lib/" + abi + "/" + aotSharedLibraryName);
+        }
+      }
     }
-
-    // Standalone, unbundled .so files discovered in getFilesDir(). App-writable, so least trusted:
-    // searched last and only used as a fallback when no signed APK contains the library.
-    searchPaths.addAll(soPaths);
 
     flutterJNI.loadDartDeferredLibrary(
         loadingUnitId, searchPaths.toArray(new String[searchPaths.size()]));
