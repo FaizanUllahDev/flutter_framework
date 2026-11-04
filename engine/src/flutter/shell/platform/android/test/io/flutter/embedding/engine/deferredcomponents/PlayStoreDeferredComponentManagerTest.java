@@ -118,8 +118,8 @@ public class PlayStoreDeferredComponentManagerTest {
     assertEquals(0, jni.deferredComponentInstallFailureCalled);
 
     assertEquals(soTestFilename, jni.searchPaths[0]);
-    assertTrue(jni.searchPaths[1].endsWith(soTestPath));
-    assertEquals(2, jni.searchPaths.length);
+    // App-writable .so files must not be included in the load paths.
+    assertEquals(1, jni.searchPaths.length);
     assertEquals(123, jni.loadingUnitId);
     assertEquals("flutter_assets", jni.assetBundlePath);
   }
@@ -149,8 +149,8 @@ public class PlayStoreDeferredComponentManagerTest {
     assertEquals(0, jni.deferredComponentInstallFailureCalled);
 
     assertEquals(soTestFilename, jni.searchPaths[0]);
-    assertTrue(jni.searchPaths[1].endsWith(soTestPath));
-    assertEquals(2, jni.searchPaths.length);
+    // App-writable .so files must not be included in the load paths.
+    assertEquals(1, jni.searchPaths.length);
     assertEquals(123, jni.loadingUnitId);
     assertEquals("custom_assets", jni.assetBundlePath);
   }
@@ -181,8 +181,8 @@ public class PlayStoreDeferredComponentManagerTest {
     assertEquals(0, jni.deferredComponentInstallFailureCalled);
 
     assertEquals(soTestFilename, jni.searchPaths[0]);
-    assertTrue(jni.searchPaths[1].endsWith(soTestPath));
-    assertEquals(2, jni.searchPaths.length);
+    // App-writable .so files must not be included in the load paths.
+    assertEquals(1, jni.searchPaths.length);
     assertEquals(123, jni.loadingUnitId);
     assertEquals("custom_assets", jni.assetBundlePath);
   }
@@ -213,8 +213,8 @@ public class PlayStoreDeferredComponentManagerTest {
     assertEquals(0, jni.deferredComponentInstallFailureCalled);
 
     assertEquals(soTestFilename, jni.searchPaths[0]);
-    assertTrue(jni.searchPaths[1].endsWith(soTestPath));
-    assertEquals(2, jni.searchPaths.length);
+    // App-writable .so files must not be included in the load paths.
+    assertEquals(1, jni.searchPaths.length);
     assertEquals(3, jni.loadingUnitId);
   }
 
@@ -224,7 +224,7 @@ public class PlayStoreDeferredComponentManagerTest {
     Context spyContext = createSpyContext(null);
     doReturn(null).when(spyContext).getAssets();
     String apkTestPath = "test/path/TestModuleName_armeabi_v7a.apk";
-    doReturn(new File(apkTestPath)).when(spyContext).getFilesDir();
+    spyContext.getApplicationInfo().splitSourceDirs = new String[] {apkTestPath};
     TestPlayStoreDeferredComponentManager playStoreManager =
         new TestPlayStoreDeferredComponentManager(spyContext, jni);
     jni.setDeferredComponentManager(playStoreManager);
@@ -243,7 +243,7 @@ public class PlayStoreDeferredComponentManagerTest {
   }
 
   @Test
-  public void searchPathsPrioritizeSignedApksOverInternalStorageSo() throws NameNotFoundException {
+  public void searchPathsIgnoreInternalStorageSo() throws NameNotFoundException {
     TestFlutterJNI jni = new TestFlutterJNI();
     Context spyContext = createSpyContext(null);
     doReturn(null).when(spyContext).getAssets();
@@ -265,14 +265,42 @@ public class PlayStoreDeferredComponentManagerTest {
     assertEquals(1, jni.loadDartDeferredLibraryCalled);
     assertEquals(0, jni.deferredComponentInstallFailureCalled);
 
-    // Search paths are ordered most-preferred first (the native loader tries them in order and
-    // stops at the first that loads). The OS-installed signed APK must be ordered before the
-    // app-writable getFilesDir() .so, so it is attempted first.
-    assertEquals(3, jni.searchPaths.length);
+    // The OS-installed signed APK is allowed, but the app-writable .so is never passed
+    // to the native loader, even if the file name matches the deferred loading unit.
+    assertEquals(2, jni.searchPaths.length);
     assertEquals("libapp.so-123.part.so", jni.searchPaths[0]);
     assertTrue(jni.searchPaths[1].endsWith(apkTestPath + "!lib/armeabi-v7a/libapp.so-123.part.so"));
-    assertTrue(jni.searchPaths[2].endsWith(soTestPath));
     assertEquals(123, jni.loadingUnitId);
+  }
+
+  @Test
+  public void searchPathsIgnoreAppWritableApks() throws NameNotFoundException {
+    TestFlutterJNI jni = new TestFlutterJNI();
+    Context spyContext = createSpyContext(null);
+    // A forged APK under getFilesDir() must never be treated as an OS-installed split APK.
+    String writableApk = "test/path/TestModuleName_armeabi_v7a.apk";
+    doReturn(new File(writableApk)).when(spyContext).getFilesDir();
+    TestPlayStoreDeferredComponentManager playStoreManager =
+        new TestPlayStoreDeferredComponentManager(spyContext, jni);
+    jni.setDeferredComponentManager(playStoreManager);
+
+    playStoreManager.installDeferredComponent(123, "TestModuleName");
+    assertEquals("libapp.so-123.part.so", jni.searchPaths[0]);
+    assertEquals(1, jni.searchPaths.length);
+  }
+
+  @Test
+  public void searchPathsHandleMissingSplits() throws NameNotFoundException {
+    TestFlutterJNI jni = new TestFlutterJNI();
+    Context spyContext = createSpyContext(null);
+    spyContext.getApplicationInfo().splitSourceDirs = null;
+    TestPlayStoreDeferredComponentManager playStoreManager =
+        new TestPlayStoreDeferredComponentManager(spyContext, jni);
+    jni.setDeferredComponentManager(playStoreManager);
+
+    playStoreManager.installDeferredComponent(123, "TestModuleName");
+    assertEquals("libapp.so-123.part.so", jni.searchPaths[0]);
+    assertEquals(1, jni.searchPaths.length);
   }
 
   @Test
@@ -281,7 +309,7 @@ public class PlayStoreDeferredComponentManagerTest {
     Context spyContext = createSpyContext(null);
     doReturn(null).when(spyContext).getAssets();
     String apkTestPath = "test/path/split_config.armeabi_v7a.apk";
-    doReturn(new File(apkTestPath)).when(spyContext).getFilesDir();
+    spyContext.getApplicationInfo().splitSourceDirs = new String[] {apkTestPath};
     TestPlayStoreDeferredComponentManager playStoreManager =
         new TestPlayStoreDeferredComponentManager(spyContext, jni);
     jni.setDeferredComponentManager(playStoreManager);
@@ -305,7 +333,7 @@ public class PlayStoreDeferredComponentManagerTest {
     Context spyContext = createSpyContext(null);
     doReturn(null).when(spyContext).getAssets();
     String apkTestPath = "test/path/invalidpath.apk";
-    doReturn(new File(apkTestPath)).when(spyContext).getFilesDir();
+    spyContext.getApplicationInfo().splitSourceDirs = new String[] {apkTestPath};
     TestPlayStoreDeferredComponentManager playStoreManager =
         new TestPlayStoreDeferredComponentManager(spyContext, jni);
     jni.setDeferredComponentManager(playStoreManager);
@@ -329,7 +357,7 @@ public class PlayStoreDeferredComponentManagerTest {
     doReturn(null).when(spyContext).getAssets();
     AssetManager assetManager = spyContext.getAssets();
     String apkTestPath = "blah doesn't matter here";
-    doReturn(new File(apkTestPath)).when(spyContext).getFilesDir();
+    spyContext.getApplicationInfo().splitSourceDirs = new String[] {apkTestPath};
     TestPlayStoreDeferredComponentManager playStoreManager =
         new TestPlayStoreDeferredComponentManager(spyContext, jni);
     jni.setDeferredComponentManager(playStoreManager);
